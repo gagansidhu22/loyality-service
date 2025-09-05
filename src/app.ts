@@ -6,123 +6,119 @@ import express, { Request, Response, Express } from "express";
 interface Customer {
     id: number;
     name: string;
-    status: "GOLD" | "SILVER" | "BRONZE";
+    status: "PLATINUM" | "GOLD" | "SILVER" | "BRONZE";
     points: number;
     lastPurchaseDate: string;
     email?: string;
-    preferredStore?: string;
+    preferredStore?: string; // Customer's designated preferred store
     joinDate: string;
     notifications: boolean;
-    lastStatusChange?: string;
+    lastStatusChange: string;
 }
 
-const customers: Customer[] = [
-    {
-        id: 1,
-        name: "John Smith",
-        status: "SILVER",
-        points: 450,
-        lastPurchaseDate: "2024-02-15",
-        joinDate: "2023-06-15",
-        notifications: true,
-        preferredStore: "Downtown",
-    },
-    {
-        id: 2,
-        name: "Jane Doe",
-        status: "GOLD",
-        points: 850,
-        lastPurchaseDate: "2024-03-01",
-        email: "jane.doe@email.com",
-        joinDate: "2023-01-20",
-        notifications: false,
-    },
-];
+/**
+ * Interface representing a purchase.
+ */
+interface Purchase {
+    customerId: number;
+    amount: number;
+    storeId: string;
+    date: string;
+}
 
 const app: Express = express();
 app.use(express.json());
 
-/**
- * Retrieve a customer by ID.
- * @route GET /api/customers/:id
- * @param req - Express request object
- * @param res - Express response object
- */
-app.get("/api/customers/:id", (req: Request, res: Response): void => {
-    const customerId: number = parseInt(req.params.id);
-    const customer: Customer | undefined = customers.find(
-        (c) => c.id === customerId
-    );
-    if (customer) {
-        res.json(customer);
-    } else {
-        res.status(404).send("Customer not found");
-    }
-});
+let customers: Customer[] = [];
+let purchases: Purchase[] = [];
 
 /**
- * Record a purchase for a customer and update status based on points.
- * @route POST /api/customers/:id/purchase
- * @param req - Express request object
- * @param res - Express response object
+ * Helper function to get multiplier based on status.
  */
-app.post("/api/customers/:id/purchase", (req: Request, res: Response): void => {
-    const customerId: number = parseInt(req.params.id);
-    const customer: Customer | undefined = customers.find(
-        (c) => c.id === customerId
-    );
+function getStatusMultiplier(status: Customer["status"]): number {
+    switch (status) {
+        case "PLATINUM":
+            return 2.0;
+        case "GOLD":
+            return 1.5;
+        case "SILVER":
+            return 1.25;
+        default:
+            return 1.0;
+    }
+}
+
+/**
+ * Calculate points for a purchase, applying status and preferred store multipliers.
+ */
+function calculatePoints(customer: Customer, purchase: Purchase): number {
+    let multiplier = getStatusMultiplier(customer.status);
+
+    // Apply preferred store bonus if applicable
+    if (customer.preferredStore && purchase.storeId === customer.preferredStore) {
+        multiplier *= 1.25;
+    }
+
+    // Respect the 3x cap
+    if (multiplier > 3.0) {
+        multiplier = 3.0;
+    }
+
+    return Math.floor(purchase.amount * multiplier);
+}
+
+/**
+ * API to record a purchase.
+ */
+app.post("/purchase", (req: Request, res: Response) => {
+    const { customerId, amount, storeId } = req.body;
+    const customer = customers.find(c => c.id === customerId);
+
     if (!customer) {
-        res.status(404).send("Customer not found");
-        return;
+        return res.status(404).json({ error: "Customer not found" });
     }
 
-    const purchaseAmount: number = req.body.amount;
-    const storeLocation: string = req.body.storeLocation;
+    const purchase: Purchase = {
+        customerId,
+        amount,
+        storeId,
+        date: new Date().toISOString()
+    };
 
-    customer.points += Math.floor(purchaseAmount / 10);
-    customer.lastPurchaseDate = new Date().toISOString();
+    const earnedPoints = calculatePoints(customer, purchase);
+    customer.points += earnedPoints;
+    customer.lastPurchaseDate = purchase.date;
 
-    if (customer.points >= 750) {
-        customer.status = "GOLD";
-        customer.lastStatusChange = new Date().toISOString();
-    } else if (customer.points >= 500) {
-        customer.status = "SILVER";
-        customer.lastStatusChange = new Date().toISOString();
-    }
+    purchases.push(purchase);
 
-    res.json(customer);
+    return res.json({
+        message: "Purchase recorded successfully",
+        earnedPoints,
+        totalPoints: customer.points,
+        store: storeId
+    });
 });
 
 /**
- * Update customer preferences, such as notifications, preferred store, and email.
- * @route PATCH /api/customers/:id/preferences
- * @param req - Express request object
- * @param res - Express response object
+ * API to set a customer's preferred store.
  */
-app.patch(
-    "/api/customers/:id/preferences",
-    (req: Request, res: Response): void => {
-        const customerId: number = parseInt(req.params.id);
-        const customer: Customer | undefined = customers.find(
-            (c) => c.id === customerId
-        );
-        if (!customer) {
-            res.status(404).send("Customer not found");
-            return;
-        }
+app.post("/customer/:id/preferred-store", (req: Request, res: Response) => {
+    const customerId = parseInt(req.params.id);
+    const { storeId } = req.body;
 
-        if (typeof req.body.notifications === "boolean") {
-            customer.notifications = req.body.notifications;
-        }
-        if (typeof req.body.preferredStore === "string") {
-            customer.preferredStore = req.body.preferredStore;
-        }
-        if (typeof req.body.email === "string") {
-            customer.email = req.body.email;
-        }
-
-        res.json(customer);
+    const customer = customers.find(c => c.id === customerId);
+    if (!customer) {
+        return res.status(404).json({ error: "Customer not found" });
     }
-);
 
-export default app;
+    customer.preferredStore = storeId;
+    return res.json({
+        message: "Preferred store updated",
+        customerId: customer.id,
+        preferredStore: storeId
+    });
+});
+
+app.listen(3000, () => {
+    console.log("Server running on port 3000");
+});
